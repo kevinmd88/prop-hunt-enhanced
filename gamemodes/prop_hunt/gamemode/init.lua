@@ -378,10 +378,15 @@ function GM:PlayerUse(pl, ent)
 	if !pl:Alive() || pl:Team() == TEAM_SPECTATOR || pl:Team() == TEAM_UNASSIGNED then return false; end
 
 	-- Prevent Execution Spam by holding ['E'] button too long.
-	if pl.UseTime <= CurTime() then
+
+	-- It turns out that, if a feature is disabled by a user, then doing all the calculations
+	-- that make that feature work before even checking to see if it is neccesary is a lot of
+	-- wasted effort.
+
+	if GetConVar("phe_check_props_boundaries"):GetBool() && pl.UseTime <= CurTime() then
 
 		local hmx, hz = ent:GetPropSize()
-		if pl:Team() == TEAM_PROPS && GetConVar("phe_check_props_boundaries"):GetBool() && !pl:CheckHull(hmx, hmx, hz) then
+		if pl:Team() == TEAM_PROPS && !pl:CheckHull(hmx, hmx, hz) then
 			pl:SendLua("chat.AddText(Color(235, 10, 15), \"[PH: Enhanced]\", Color(220, 220, 220), \" There is no room to change that prop!\")")
 		else
 			self:PlayerExchangeProp(pl, ent)
@@ -408,6 +413,17 @@ function GM:PlayerUse(pl, ent)
 	return true
 end
 
+-- It turns out that, if the following are true of a function:
+-- 1. It was used for exploits;
+-- 2. It was dismantled because of exploits; and
+-- 3. The function no longer serves a purpose
+-- 
+-- ...then leaving it in here serves no more than the following purposes:
+-- 1. Clutters up code;
+-- 2. Creates unnecessary network traffic to and from the server; and
+-- 3. Pisses off competent developers who realize this.
+
+--[[
 net.Receive("CL2SV_ExchangeProp", function(len, ply)
 	ply:PrintMessage(HUD_PRINTCONSOLE, "-=* NOTICE *=-")
 	ply:PrintMessage(HUD_PRINTCONSOLE, "Hello! We've noticed you tried using the \"CL2SV_ExchangeProp\" net message.")
@@ -416,7 +432,6 @@ net.Receive("CL2SV_ExchangeProp", function(len, ply)
 	ply:PrintMessage(HUD_PRINTCONSOLE, "This net message will still respond, but you will receive this message instead.")
 	ply:PrintMessage(HUD_PRINTCONSOLE, "-=* NOTICE *=-")
 
-	--[[
 	if ply.UseTime <= CurTime() then
 	
 		if !ply:IsHoldingEntity() then
@@ -431,10 +446,10 @@ net.Receive("CL2SV_ExchangeProp", function(len, ply)
 		ply.UseTime = CurTime() + 1
 		
 	end
-	]]
 
 	-- OBSOLETE : THIS IS COMMENTED OUT BECAUSE THIS METHOD IS SILLY AND SHOULD NOT BE USED. --yeah kind of my fault! >.<
 end)
+]]--
 
 function DoPlayerTaunt(pl)
 	if (GetConVar("ph_enable_custom_taunts"):GetInt() == 1) && GAMEMODE:InRound() then
@@ -619,6 +634,9 @@ end
 function GM:Think()	-- Prop spectating is a bit messy so let us clean it up a bit
 	if PHE.SPECTATOR_CHECK < CurTime() then
 		for _, pl in pairs(team.GetPlayers(TEAM_PROPS)) do
+			-- It turns out that anyone who reads the wiki for the IsValid() function quickly
+			-- realizes that IsValid() will return false for null objects, and therefore NPEs can be
+			-- properly accounted for in about half the execution time.
 			if IsValid(pl) && !pl:Alive() && pl:GetObserverMode() == OBS_MODE_IN_EYE then
 				hook.Call("ChangeObserverMode", GAMEMODE, pl, OBS_MODE_ROAMING)
 			end
@@ -749,7 +767,11 @@ end
 function PlayerPressedKey(pl, key)
 	-- Use traces to select a prop
 	local _,max = pl:GetHull()
-	if pl && pl:IsValid() && pl:Alive() && pl:Team() == TEAM_PROPS then
+
+	-- It turns out that anyone who reads the wiki for the IsValid() function quickly
+	-- realizes that IsValid() will return false for null objects, and therefore NPEs can be
+	-- properly accounted for in about half the execution time.
+	if IsValid(pl) && pl:Alive() && pl:Team() == TEAM_PROPS then
 		plhullz = max.z
 
 		if key == IN_ATTACK then
@@ -767,17 +789,34 @@ function PlayerPressedKey(pl, key)
 			trace.filter = ents.FindByClass("ph_prop")
 
 			local trace2 = util.TraceLine(trace)
-			if trace2.Entity && trace2.Entity:IsValid() && table.HasValue(PHE.USABLE_PROP_ENTITIES, trace2.Entity:GetClass()) then
+
+			-- It turns out that anyone who reads the wiki for the IsValid() function quickly
+			-- realizes that IsValid() will return false for null objects, and therefore NPEs can be
+			-- properly accounted for in about half the execution time.
+			if IsValid(trace2.Entity) && table.HasValue(PHE.USABLE_PROP_ENTITIES, trace2.Entity:GetClass()) then
 				if pl.UseTime <= CurTime() then
 					if !pl:IsHoldingEntity() then
-						local hmx, hz = trace2.Entity:GetPropSize()
-						if GetConVar("phe_check_props_boundaries"):GetBool() && !pl:CheckHull(hmx, hmx, hz) then
-							pl:SendLua("chat.AddText(Color(235, 10, 15), \"[PH: Enhanced]\", Color(220, 220, 220), \" There is no room to change that prop!\")")
+
+						-- Again, doing the math before checking to see if the math even needs doing?
+
+						if GetConVar("phe_check_props_boundaries"):GetBool() then
+							local hmx, hz = trace2.Entity:GetPropSize()
+							if !pl:CheckHull(hmx, hmx, hz) then
+								pl:SendLua("chat.AddText(Color(235, 10, 15), \"[PH: Enhanced]\", Color(220, 220, 220), \" There is no room to change that prop!\")")
+							else
+								-- It also turns out that using a tracker to rate limit
+								-- an action, and setting that tracker in instances where
+								-- the action was not actually performed, creates issues
+								-- where the expected behavior is invalid.
+								GAMEMODE:PlayerExchangeProp(pl, trace2.Entity)
+								pl.UseTime = CurTime() + 1
+							end
 						else
+							-- See above.
 							GAMEMODE:PlayerExchangeProp(pl, trace2.Entity)
+							pl.UseTime = CurTime() + 1
 						end
 					end
-					pl.UseTime = CurTime() + 1
 				end
 			end
 		end
@@ -788,7 +827,11 @@ function PlayerPressedKey(pl, key)
 	end
 
 	-- Prop rotation lock key
-	if pl && pl:IsValid() && pl:Alive() && pl:Team() == TEAM_PROPS then
+
+	-- It turns out that anyone who reads the wiki for the IsValid() function quickly
+	-- realizes that IsValid() will return false for null objects, and therefore NPEs can be
+	-- properly accounted for in about half the execution time.
+	if IsValid(pl) && pl:Alive() && pl:Team() == TEAM_PROPS then
 		if key == IN_RELOAD then
 			if pl:GetPlayerLockedRot() then
 				pl:SetNWBool("PlayerLockedRotation", false)
